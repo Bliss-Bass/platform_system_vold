@@ -39,6 +39,8 @@
 
 using android::base::StringPrintf;
 
+using namespace std::chrono_literals;
+
 namespace android {
 namespace vold {
 
@@ -46,7 +48,7 @@ static const unsigned int kMajorBlockMmc = 179;
 
 PrivateVolume::PrivateVolume(dev_t device, const std::string& keyRaw) :
         VolumeBase(Type::kPrivate), mRawDevice(device), mKeyRaw(keyRaw) {
-    setId(StringPrintf("private:%u,%u", major(device), minor(device)));
+    setId(StringPrintf("private:%u_%u", major(device), minor(device)));
     mRawDevPath = StringPrintf("/dev/block/vold/%s", getId().c_str());
 }
 
@@ -92,6 +94,11 @@ status_t PrivateVolume::doDestroy() {
 }
 
 status_t PrivateVolume::doMount() {
+    if (!WaitForFile(mDmDevPath, 15s)) {
+        PLOG(ERROR) << "Timed out waiting for " << getId();
+        return -EIO;
+    }
+
     if (readMetadata()) {
         LOG(ERROR) << getId() << " failed to read metadata";
         return -EIO;
@@ -106,7 +113,7 @@ status_t PrivateVolume::doMount() {
     }
 
     if (mFsType == "ext4") {
-        int res = ext4::Check(mDmDevPath, mPath);
+        int res = ext4::Check(mDmDevPath, mPath, true);
         if (res == 0 || res == 1) {
             LOG(DEBUG) << getId() << " passed filesystem check";
         } else {
@@ -114,13 +121,13 @@ status_t PrivateVolume::doMount() {
             return -EIO;
         }
 
-        if (ext4::Mount(mDmDevPath, mPath, false, false, true)) {
+        if (ext4::Mount(mDmDevPath, mPath, false, false, true, "", true)) {
             PLOG(ERROR) << getId() << " failed to mount";
             return -EIO;
         }
 
     } else if (mFsType == "f2fs") {
-        int res = f2fs::Check(mDmDevPath);
+        int res = f2fs::Check(mDmDevPath, true);
         if (res == 0) {
             LOG(DEBUG) << getId() << " passed filesystem check";
         } else {
@@ -128,7 +135,7 @@ status_t PrivateVolume::doMount() {
             return -EIO;
         }
 
-        if (f2fs::Mount(mDmDevPath, mPath)) {
+        if (f2fs::Mount(mDmDevPath, mPath, "", true)) {
             PLOG(ERROR) << getId() << " failed to mount";
             return -EIO;
         }
@@ -184,6 +191,11 @@ status_t PrivateVolume::doFormat(const std::string& fsType) {
             resolvedFsType = "ext4";
         }
         LOG(DEBUG) << "Resolved auto to " << resolvedFsType;
+    }
+
+    if (!WaitForFile(mDmDevPath, 15s)) {
+        PLOG(ERROR) << "Timed out waiting for " << getId();
+        return -EIO;
     }
 
     if (resolvedFsType == "ext4") {
